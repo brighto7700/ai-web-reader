@@ -126,8 +126,8 @@ func analyzeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	cleanText := extractText(doc)
 
-	if len(cleanText) > 10000 {
-		cleanText = cleanText[:10000]
+	if len(cleanText) > 2000 {
+		cleanText = cleanText[:2000]
 	}
 
 	// 3. Ensure we actually scraped something before hitting the AI
