@@ -13,6 +13,7 @@ import (
 	"golang.org/x/net/html"
 )
 
+// Single file solution (Pxxl-friendly)
 const indexHTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -28,7 +29,7 @@ const indexHTML = `<!DOCTYPE html>
 </head>
 <body>
     <h2>What does AI see?</h2>
-    <input type="text" id="urlInput" placeholder="https://dev.to" value="https://dev.to">
+    <input type="text" id="urlInput" placeholder="https://example.com" value="https://example.com">
     <button onclick="analyze()">Analyze</button>
     <div id="output">Waiting for URL...</div>
 
@@ -36,28 +37,22 @@ const indexHTML = `<!DOCTYPE html>
         async function analyze() {
             const url = document.getElementById('urlInput').value;
             const output = document.getElementById('output');
-            
-            output.innerText = "1. Fetching raw HTML and analyzing... (max 15 seconds)\n\n";
+            output.innerText = "Analyzing site content... (this takes ~10s)\n\n";
 
             try {
-                console.log("Sending request to backend for:", url);
                 const response = await fetch('/analyze?url=' + encodeURIComponent(url));
-                
                 if (!response.ok) {
                     const errText = await response.text();
-                    output.innerText = "Server Error (" + response.status + "): " + errText;
+                    output.innerText = "Server Error: " + errText;
                     return;
                 }
 
                 const text = await response.text();
-                console.log("Response received from backend!");
-                
                 output.innerText = "";
                 
-                // Simulated streaming effect
+                // Typing effect
                 const words = text.split(" ");
                 let i = 0;
-                
                 const interval = setInterval(() => {
                     if (i < words.length) {
                         output.innerText += words[i] + " ";
@@ -66,10 +61,8 @@ const indexHTML = `<!DOCTYPE html>
                         clearInterval(interval);
                     }
                 }, 40);
-
             } catch (err) {
-                console.error("Fetch failed:", err);
-                output.innerText = "Network Error: Could not reach the server.";
+                output.innerText = "Network Error: Check connection.";
             }
         }
     </script>
@@ -97,43 +90,37 @@ func analyzeHandler(w http.ResponseWriter, r *http.Request) {
 
 	targetURL := r.URL.Query().Get("url")
 	if targetURL == "" {
-		http.Error(w, "Missing URL param", http.StatusBadRequest)
+		http.Error(w, "Missing URL", http.StatusBadRequest)
 		return
 	}
 
-	// 1. Give the scraper a strict 10-second timeout so it never hangs forever
 	client := &http.Client{Timeout: 10 * time.Second}
-	
-	// 2. Disguise the scraper as a normal Chrome browser
 	req, err := http.NewRequest("GET", targetURL, nil)
 	if err != nil {
-		fmt.Fprintf(w, "Error creating request: %s", err.Error())
+		fmt.Fprintf(w, "Request Error: %s", err.Error())
 		return
 	}
+	// Disguise as browser
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Fprintf(w, "Error fetching URL (Target site might be blocking bots): %s", err.Error())
+		fmt.Fprintf(w, "Scrape Error: %s", err.Error())
 		return
 	}
 	defer resp.Body.Close()
 
 	doc, err := html.Parse(resp.Body)
 	if err != nil {
-		fmt.Fprintf(w, "Error parsing HTML data.")
+		fmt.Fprint(w, "Parse Error.")
 		return
 	}
+	
 	cleanText := extractText(doc)
-
-	if len(cleanText) > 2000 {
-		cleanText = cleanText[:2000]
-	}
-
-	// 3. Ensure we actually scraped something before hitting the AI
-	if strings.TrimSpace(cleanText) == "" {
-		fmt.Fprint(w, "Error: The AI scraper couldn't find any readable text on this page. It might be heavily protected or an empty React shell.")
-		return
+	
+	// Aggressive trim to keep it free and fast
+	if len(cleanText) > 1200 {
+		cleanText = cleanText[:1200]
 	}
 
 	aiResponse := callOpenRouter(cleanText)
@@ -144,7 +131,7 @@ func extractText(n *html.Node) string {
 	if n.Type == html.TextNode {
 		return strings.TrimSpace(n.Data) + " "
 	}
-	if n.Type == html.ElementNode && (n.Data == "script" || n.Data == "style" || n.Data == "noscript" || n.Data == "nav" || n.Data == "footer") {
+	if n.Type == html.ElementNode && (n.Data == "script" || n.Data == "style" || n.Data == "nav" || n.Data == "footer") {
 		return ""
 	}
 	var text string
@@ -157,53 +144,47 @@ func extractText(n *html.Node) string {
 func callOpenRouter(text string) string {
 	apiKey := os.Getenv("OPENROUTER_API_KEY")
 	if apiKey == "" {
-		return "API ERROR: OPENROUTER_API_KEY environment variable is missing on the server."
+		return "API ERROR: Set OPENROUTER_API_KEY in Pxxl settings."
 	}
 
 	url := "https://openrouter.ai/api/v1/chat/completions"
-	prompt := "You are an AI scraper analyzing a website's raw DOM text. Summarize what this page is about, who it is for, and point out what is missing or unclear (e.g., if it's a blank React SPA). Be honest, brief, and direct. Here is the text: " + text
+	prompt := "Analyze this raw website text. Summarize the purpose and note if it looks like a blank JS/React app. Text: " + text
 
 	reqBody := map[string]interface{}{
 		"model": "google/gemini-2.0-flash-lite-preview-02-05:free", 
 		"messages": []map[string]string{
 			{"role": "user", "content": prompt},
 		},
+		"max_tokens": 250, // CRITICAL: Keeps the request "cheap" enough for free tier
 	}
+	
 	jsonBody, _ := json.Marshal(reqBody)
-
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return "Error creating request."
-	}
-
+	req, _ := http.NewRequest("POST", url, bytes.NewBuffer(jsonBody))
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("HTTP-Referer", "https://github.com/what-ai-sees")
-	req.Header.Set("X-Title", "AI Web Scraper Vision")
 
-	// 15-second timeout for the AI API
+	// 15s timeout for AI response
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "Error calling AI API: " + err.Error()
+		return "AI API Error: " + err.Error()
 	}
 	defer resp.Body.Close()
 
 	bodyBytes, _ := io.ReadAll(resp.Body)
-
 	var result map[string]interface{}
 	json.Unmarshal(bodyBytes, &result)
 
+	// Catch OpenRouter error messages
 	if errMap, hasErr := result["error"].(map[string]interface{}); hasErr {
-		if msg, ok := errMap["message"].(string); ok {
-			return "OpenRouter Error: " + msg
-		}
+		return "OpenRouter Says: " + fmt.Sprint(errMap["message"])
 	}
 
 	choices, ok := result["choices"].([]interface{})
 	if !ok || len(choices) == 0 {
-		return "Error: Unexpected empty response from OpenRouter."
+		return "Error: No response from AI."
 	}
+	
 	message := choices[0].(map[string]interface{})["message"].(map[string]interface{})
 	return message["content"].(string)
 }
