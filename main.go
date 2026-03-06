@@ -33,20 +33,37 @@ const indexHTML = `<!DOCTYPE html>
     <div id="output">Waiting for URL...</div>
 
     <script>
-        function analyze() {
+        async function analyze() {
             const url = document.getElementById('urlInput').value;
             const output = document.getElementById('output');
-            output.innerText = "Fetching and analyzing...\n\n";
+            
+            // Tell the user we are working (since fetching takes a few seconds)
+            output.innerText = "Fetching raw HTML and analyzing... (this usually takes 5-10 seconds)\n\n";
 
-            const source = new EventSource('/analyze?url=' + encodeURIComponent(url));
-            
-            source.onmessage = function(event) {
-                output.innerText += event.data.replace(/<br>/g, "\n") + " "; 
-            };
-            
-            source.onerror = function() {
-                source.close(); 
-            };
+            try {
+                // Standard fetch request - no SSE needed!
+                const response = await fetch('/analyze?url=' + encodeURIComponent(url));
+                const text = await response.text();
+                
+                // Clear the loading message
+                output.innerText = "";
+                
+                // Simulated streaming effect (Frontend trick!)
+                const words = text.split(" ");
+                let i = 0;
+                
+                const interval = setInterval(() => {
+                    if (i < words.length) {
+                        output.innerText += words[i] + " ";
+                        i++;
+                    } else {
+                        clearInterval(interval); // Stop typing when done
+                    }
+                }, 40); // 40ms per word = nice reading speed
+
+            } catch (err) {
+                output.innerText = "Error connecting to the server.";
+            }
         }
     </script>
 </body>
@@ -69,35 +86,25 @@ func main() {
 }
 
 func analyzeHandler(w http.ResponseWriter, r *http.Request) {
-	// SSE Headers + Anti-Buffering Header for PaaS platforms like Pxxl
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no") 
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
-		return
-	}
+	// Standard text response
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 
 	targetURL := r.URL.Query().Get("url")
 	if targetURL == "" {
+		http.Error(w, "Missing URL", http.StatusBadRequest)
 		return
 	}
 
 	resp, err := http.Get(targetURL)
 	if err != nil {
-		fmt.Fprintf(w, "data: Error fetching URL: %s\n\n", err.Error())
-		flusher.Flush()
+		fmt.Fprintf(w, "Error fetching URL: %s", err.Error())
 		return
 	}
 	defer resp.Body.Close()
 
 	doc, err := html.Parse(resp.Body)
 	if err != nil {
-		fmt.Fprintf(w, "data: Error parsing HTML\n\n")
-		flusher.Flush()
+		fmt.Fprintf(w, "Error parsing HTML data.")
 		return
 	}
 	cleanText := extractText(doc)
@@ -109,14 +116,8 @@ func analyzeHandler(w http.ResponseWriter, r *http.Request) {
 	// Call OpenRouter
 	aiResponse := callOpenRouter(cleanText)
 
-	// Stream the response
-	words := strings.Split(aiResponse, " ")
-	for _, word := range words {
-		safeWord := strings.ReplaceAll(word, "\n", "<br>")
-		fmt.Fprintf(w, "data: %s\n\n", safeWord)
-		flusher.Flush()
-		time.Sleep(50 * time.Millisecond) 
-	}
+	// Send the entire response back at once (JavaScript will handle the typing effect)
+	fmt.Fprint(w, aiResponse)
 }
 
 func extractText(n *html.Node) string {
@@ -172,7 +173,6 @@ func callOpenRouter(text string) string {
 	var result map[string]interface{}
 	json.Unmarshal(bodyBytes, &result)
 
-	// Safely check for API errors (like bad keys or rate limits)
 	if errMap, hasErr := result["error"].(map[string]interface{}); hasErr {
 		if msg, ok := errMap["message"].(string); ok {
 			return "OpenRouter Error: " + msg
