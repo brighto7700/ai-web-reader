@@ -13,7 +13,6 @@ import (
 	"golang.org/x/net/html"
 )
 
-// We inline the HTML so the Go binary is 100% self-contained (Pxxl-friendly!)
 const indexHTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
