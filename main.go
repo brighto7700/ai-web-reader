@@ -151,7 +151,7 @@ func callOpenRouter(text string) string {
 	prompt := "Analyze this raw website text. Summarize the purpose and note if it looks like a blank JS/React app. Text: " + text
 
 	reqBody := map[string]interface{}{
-		"model": "google/gemini-2.0-flash-lite-preview-02-05:free", 
+		"model": "google/gemma-3-27b-it:free", 
 		"messages": []map[string]string{
 			{"role": "user", "content": prompt},
 		},
