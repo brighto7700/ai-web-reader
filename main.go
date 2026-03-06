@@ -164,7 +164,7 @@ func callOpenRouter(text string) string {
 	prompt := "You are an AI scraper analyzing a website's raw DOM text. Summarize what this page is about, who it is for, and point out what is missing or unclear (e.g., if it's a blank React SPA). Be honest, brief, and direct. Here is the text: " + text
 
 	reqBody := map[string]interface{}{
-		"model": "google/gemini-2.5-flash", 
+		"model": "google/gemini-2.0-flash-lite-preview-02-05:free", 
 		"messages": []map[string]string{
 			{"role": "user", "content": prompt},
 		},
