@@ -13,10 +13,51 @@ import (
 	"golang.org/x/net/html"
 )
 
+// We inline the HTML so the Go binary is 100% self-contained (Pxxl-friendly!)
+const indexHTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Scraper Vision</title>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; background: #1a1a1a; color: #fff; }
+        input { width: 70%; padding: 10px; font-size: 16px; border-radius: 4px; border: 1px solid #444; background: #333; color: white; }
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 4px; }
+        #output { margin-top: 20px; padding: 20px; background: #000; border: 1px solid #333; min-height: 200px; white-space: pre-wrap; font-family: monospace; line-height: 1.5; }
+    </style>
+</head>
+<body>
+    <h2>What does AI see?</h2>
+    <input type="text" id="urlInput" placeholder="https://dev.to" value="https://dev.to">
+    <button onclick="analyze()">Analyze</button>
+    <div id="output">Waiting for URL...</div>
+
+    <script>
+        function analyze() {
+            const url = document.getElementById('urlInput').value;
+            const output = document.getElementById('output');
+            output.innerText = "Fetching and analyzing...\n\n";
+
+            const source = new EventSource('/analyze?url=' + encodeURIComponent(url));
+            
+            source.onmessage = function(event) {
+                output.innerText += event.data.replace(/<br>/g, "\n") + " "; 
+            };
+            
+            source.onerror = function() {
+                source.close(); 
+            };
+        }
+    </script>
+</body>
+</html>`
+
 func main() {
-	// Serve the frontend UI
+	// Serve the inlined HTML directly
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "index.html")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, indexHTML)
 	})
 
 	// Handle the scraping and AI analysis
@@ -56,7 +97,6 @@ func analyzeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	// Parse the HTML and extract clean text
 	doc, err := html.Parse(resp.Body)
 	if err != nil {
 		fmt.Fprintf(w, "data: Error parsing HTML\n\n")
@@ -65,31 +105,28 @@ func analyzeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	cleanText := extractText(doc)
 
-	// Trim text so we don't exceed AI token limits (approx 10,000 chars for safety)
 	if len(cleanText) > 10000 {
 		cleanText = cleanText[:10000]
 	}
 
-	// 3. Call OpenRouter (Using Gemini)
+	// 3. Call OpenRouter
 	aiResponse := callOpenRouter(cleanText)
 
-	// 4. Stream the response back to the UI word-by-word (Simulated stream)
+	// 4. Stream the response
 	words := strings.Split(aiResponse, " ")
 	for _, word := range words {
-		// Replace newlines with a token so the SSE format doesn't break
 		safeWord := strings.ReplaceAll(word, "\n", "<br>")
 		fmt.Fprintf(w, "data: %s\n\n", safeWord)
 		flusher.Flush()
-		time.Sleep(50 * time.Millisecond) // Creates the live "typing" effect
+		time.Sleep(50 * time.Millisecond) 
 	}
 }
 
-// extractText recursively grabs text, ignoring scripts, styles, and empty elements
+// extractText recursively grabs text, ignoring scripts and styles
 func extractText(n *html.Node) string {
 	if n.Type == html.TextNode {
 		return strings.TrimSpace(n.Data) + " "
 	}
-	// Ignore noisy tags that bots usually skip
 	if n.Type == html.ElementNode && (n.Data == "script" || n.Data == "style" || n.Data == "noscript" || n.Data == "nav" || n.Data == "footer") {
 		return ""
 	}
@@ -100,7 +137,7 @@ func extractText(n *html.Node) string {
 	return text
 }
 
-// callOpenRouter calls the OpenRouter REST API using a free Gemini model
+// callOpenRouter calls the OpenRouter REST API
 func callOpenRouter(text string) string {
 	apiKey := os.Getenv("OPENROUTER_API_KEY")
 	url := "https://openrouter.ai/api/v1/chat/completions"
@@ -108,7 +145,7 @@ func callOpenRouter(text string) string {
 	prompt := "You are an AI scraper analyzing a website's raw DOM text. Summarize what this page is about, who it is for, and point out what is missing or unclear (e.g., if it's a blank React SPA). Be honest, brief, and direct. Here is the text: " + text
 
 	reqBody := map[string]interface{}{
-		"model": "google/gemini-2.5-flash", // Using Gemini via OpenRouter
+		"model": "google/gemini-2.5-flash", 
 		"messages": []map[string]string{
 			{"role": "user", "content": prompt},
 		},
@@ -137,7 +174,6 @@ func callOpenRouter(text string) string {
 	var result map[string]interface{}
 	json.Unmarshal(bodyBytes, &result)
 
-	// Safely extract the text from the OpenAI-style JSON format
 	defer func() { recover() }() 
 	
 	choices := result["choices"].([]interface{})
