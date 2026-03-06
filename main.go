@@ -53,13 +53,11 @@ const indexHTML = `<!DOCTYPE html>
 </html>`
 
 func main() {
-	// Serve the inlined HTML directly
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprint(w, indexHTML)
 	})
 
-	// Handle the scraping and AI analysis
 	http.HandleFunc("/analyze", analyzeHandler)
 
 	port := os.Getenv("PORT")
@@ -71,11 +69,11 @@ func main() {
 }
 
 func analyzeHandler(w http.ResponseWriter, r *http.Request) {
-	// 1. Set headers for Server-Sent Events (SSE)
+	// SSE Headers + Anti-Buffering Header for PaaS platforms like Pxxl
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Accel-Buffering", "no")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no") 
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -88,10 +86,9 @@ func analyzeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Scrape the URL
 	resp, err := http.Get(targetURL)
 	if err != nil {
-		fmt.Fprintf(w, "data: Error fetching URL\n\n")
+		fmt.Fprintf(w, "data: Error fetching URL: %s\n\n", err.Error())
 		flusher.Flush()
 		return
 	}
@@ -109,10 +106,10 @@ func analyzeHandler(w http.ResponseWriter, r *http.Request) {
 		cleanText = cleanText[:10000]
 	}
 
-	// 3. Call OpenRouter
+	// Call OpenRouter
 	aiResponse := callOpenRouter(cleanText)
 
-	// 4. Stream the response
+	// Stream the response
 	words := strings.Split(aiResponse, " ")
 	for _, word := range words {
 		safeWord := strings.ReplaceAll(word, "\n", "<br>")
@@ -122,7 +119,6 @@ func analyzeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// extractText recursively grabs text, ignoring scripts and styles
 func extractText(n *html.Node) string {
 	if n.Type == html.TextNode {
 		return strings.TrimSpace(n.Data) + " "
@@ -137,11 +133,13 @@ func extractText(n *html.Node) string {
 	return text
 }
 
-// callOpenRouter calls the OpenRouter REST API
 func callOpenRouter(text string) string {
 	apiKey := os.Getenv("OPENROUTER_API_KEY")
-	url := "https://openrouter.ai/api/v1/chat/completions"
+	if apiKey == "" {
+		return "API ERROR: OPENROUTER_API_KEY environment variable is missing on the server."
+	}
 
+	url := "https://openrouter.ai/api/v1/chat/completions"
 	prompt := "You are an AI scraper analyzing a website's raw DOM text. Summarize what this page is about, who it is for, and point out what is missing or unclear (e.g., if it's a blank React SPA). Be honest, brief, and direct. Here is the text: " + text
 
 	reqBody := map[string]interface{}{
@@ -159,13 +157,13 @@ func callOpenRouter(text string) string {
 
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("HTTP-Referer", "https://github.com/yourusername/what-ai-sees")
+	req.Header.Set("HTTP-Referer", "https://github.com/what-ai-sees")
 	req.Header.Set("X-Title", "AI Web Scraper Vision")
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "Error calling AI API."
+		return "Error calling AI API: " + err.Error()
 	}
 	defer resp.Body.Close()
 
@@ -174,9 +172,17 @@ func callOpenRouter(text string) string {
 	var result map[string]interface{}
 	json.Unmarshal(bodyBytes, &result)
 
-	defer func() { recover() }() 
-	
-	choices := result["choices"].([]interface{})
+	// Safely check for API errors (like bad keys or rate limits)
+	if errMap, hasErr := result["error"].(map[string]interface{}); hasErr {
+		if msg, ok := errMap["message"].(string); ok {
+			return "OpenRouter Error: " + msg
+		}
+	}
+
+	choices, ok := result["choices"].([]interface{})
+	if !ok || len(choices) == 0 {
+		return "Error: Unexpected empty response from OpenRouter."
+	}
 	message := choices[0].(map[string]interface{})["message"].(map[string]interface{})
 	return message["content"].(string)
 }
