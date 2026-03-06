@@ -37,18 +37,24 @@ const indexHTML = `<!DOCTYPE html>
             const url = document.getElementById('urlInput').value;
             const output = document.getElementById('output');
             
-            // Tell the user we are working (since fetching takes a few seconds)
-            output.innerText = "Fetching raw HTML and analyzing... (this usually takes 5-10 seconds)\n\n";
+            output.innerText = "1. Fetching raw HTML and analyzing... (max 15 seconds)\n\n";
 
             try {
-                // Standard fetch request - no SSE needed!
+                console.log("Sending request to backend for:", url);
                 const response = await fetch('/analyze?url=' + encodeURIComponent(url));
-                const text = await response.text();
                 
-                // Clear the loading message
+                if (!response.ok) {
+                    const errText = await response.text();
+                    output.innerText = "Server Error (" + response.status + "): " + errText;
+                    return;
+                }
+
+                const text = await response.text();
+                console.log("Response received from backend!");
+                
                 output.innerText = "";
                 
-                // Simulated streaming effect (Frontend trick!)
+                // Simulated streaming effect
                 const words = text.split(" ");
                 let i = 0;
                 
@@ -57,12 +63,13 @@ const indexHTML = `<!DOCTYPE html>
                         output.innerText += words[i] + " ";
                         i++;
                     } else {
-                        clearInterval(interval); // Stop typing when done
+                        clearInterval(interval);
                     }
-                }, 40); // 40ms per word = nice reading speed
+                }, 40);
 
             } catch (err) {
-                output.innerText = "Error connecting to the server.";
+                console.error("Fetch failed:", err);
+                output.innerText = "Network Error: Could not reach the server.";
             }
         }
     </script>
@@ -86,18 +93,28 @@ func main() {
 }
 
 func analyzeHandler(w http.ResponseWriter, r *http.Request) {
-	// Standard text response
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 
 	targetURL := r.URL.Query().Get("url")
 	if targetURL == "" {
-		http.Error(w, "Missing URL", http.StatusBadRequest)
+		http.Error(w, "Missing URL param", http.StatusBadRequest)
 		return
 	}
 
-	resp, err := http.Get(targetURL)
+	// 1. Give the scraper a strict 10-second timeout so it never hangs forever
+	client := &http.Client{Timeout: 10 * time.Second}
+	
+	// 2. Disguise the scraper as a normal Chrome browser
+	req, err := http.NewRequest("GET", targetURL, nil)
 	if err != nil {
-		fmt.Fprintf(w, "Error fetching URL: %s", err.Error())
+		fmt.Fprintf(w, "Error creating request: %s", err.Error())
+		return
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Fprintf(w, "Error fetching URL (Target site might be blocking bots): %s", err.Error())
 		return
 	}
 	defer resp.Body.Close()
@@ -113,10 +130,13 @@ func analyzeHandler(w http.ResponseWriter, r *http.Request) {
 		cleanText = cleanText[:10000]
 	}
 
-	// Call OpenRouter
-	aiResponse := callOpenRouter(cleanText)
+	// 3. Ensure we actually scraped something before hitting the AI
+	if strings.TrimSpace(cleanText) == "" {
+		fmt.Fprint(w, "Error: The AI scraper couldn't find any readable text on this page. It might be heavily protected or an empty React shell.")
+		return
+	}
 
-	// Send the entire response back at once (JavaScript will handle the typing effect)
+	aiResponse := callOpenRouter(cleanText)
 	fmt.Fprint(w, aiResponse)
 }
 
@@ -161,7 +181,8 @@ func callOpenRouter(text string) string {
 	req.Header.Set("HTTP-Referer", "https://github.com/what-ai-sees")
 	req.Header.Set("X-Title", "AI Web Scraper Vision")
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	// 15-second timeout for the AI API
+	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "Error calling AI API: " + err.Error()
