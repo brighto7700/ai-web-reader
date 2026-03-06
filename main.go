@@ -151,11 +151,16 @@ func callOpenRouter(text string) string {
 	prompt := "Analyze this raw website text. Summarize the purpose and note if it looks like a blank JS/React app. Text: " + text
 
 	reqBody := map[string]interface{}{
-		"model": "google/gemma-3-27b-it:free", 
+		// Using 'models' (plural) tells OpenRouter to automatically use backups if one fails!
+		"models": []string{
+			"google/gemma-3-27b-it:free",
+			"meta-llama/llama-3.3-70b-instruct:free",
+			"mistralai/mistral-7b-instruct:free",
+		},
 		"messages": []map[string]string{
 			{"role": "user", "content": prompt},
 		},
-		"max_tokens": 250, // CRITICAL: Keeps the request "cheap" enough for free tier
+		"max_tokens": 250, 
 	}
 	
 	jsonBody, _ := json.Marshal(reqBody)
